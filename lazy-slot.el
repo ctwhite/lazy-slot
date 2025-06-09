@@ -64,7 +64,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Customization and Internal State
 
-(defconst lazy-slot-version "0.9.0"
+(defconst lazy-slot-version "0.9.1"
   "Version of lazy-slot.el.")
 
 (defgroup lazy-slot nil
@@ -150,29 +150,36 @@ Results:
       (setq opts nil))
     (apply #'lazy-slot--make-opts (append opts nil))))
 
-(defun lazy-slot--init-async-slot (obj slot opts promise-thunk)
-  "Initialize async SLOT on OBJ using PROMISE-THUNK and OPTS.
+(defun lazy-slot--init-async-slot (obj slot opts promise-thunk-form)
+  "Initialize async SLOT on OBJ using PROMISE-THUNK-FORM and OPTS.
 This function creates a promise, wraps it with timeout and retry
 logic, converts it to a future, and stores it in the object's slot.
+`PROMISE-THUNK-FORM` is the raw form (e.g., a lambda) that should
+return a promise.
+
 Arguments:
 - OBJ (cl-struct): The object instance.
 - SLOT (symbol): The slot to initialize.
 - OPTS (lazy-slot-opts): The parsed options for this operation.
-- PROMISE-THUNK (function): A zero-argument function that returns a promise.
+- PROMISE-THUNK-FORM (function): A zero-argument function that returns a promise.
 Results:
 - The processed `concur` promise."
-  (let* ((base-promise (funcall promise-thunk))
+  (let* ((base-promise (funcall promise-thunk-form obj)) ; Pass obj to the promise-thunk-form
          (timeout (lazy-slot-opts-timeout opts))
          (retry-opts (lazy-slot-opts-retry opts))
          (processed-promise base-promise))
     (when timeout (setq processed-promise (concur:timeout processed-promise timeout)))
-    (when retry-opts (setq processed-promise (apply #'concur:retry promise-thunk retry-opts)))
+    ;; Use the base-promise for retries, but pass a THUNK that re-evaluates it
+    (when retry-opts
+      (setq processed-promise (apply #'concur:retry
+                                     (lambda () (funcall promise-thunk-form obj)) ; Re-evaluate promise-thunk-form on retry
+                                     retry-opts)))
     (let ((future (concur:from-promise processed-promise)))
       (setf (cl-struct-slot-value (type-of obj) slot obj) future)
       (when (lazy-slot-opts-auto-fetch opts) (concur:force future))
       processed-promise)))
 
-(defun lazy-slot--await-slot (obj slot opts promise-thunk)
+(defun lazy-slot--await-slot (obj slot opts promise-thunk-form)
   "Synchronously fetch or return cached value of OBJ's SLOT.
 This is the core blocking logic for async slot getters. It handles
 the three main states: value is a future, value is already resolved,
@@ -181,7 +188,7 @@ Arguments:
 - OBJ (cl-struct): The object instance.
 - SLOT (symbol): The slot to await.
 - OPTS (lazy-slot-opts): The parsed options for this operation.
-- PROMISE-THUNK (function): A zero-argument function that returns a promise.
+- PROMISE-THUNK-FORM (form): A form that, when evaluated with `obj`, returns a promise.
 Results:
 - The resolved value of the slot."
   (let ((val (cl-struct-slot-value (type-of obj) slot obj)))
@@ -192,7 +199,7 @@ Results:
      ((not (null val)) val)
      ;; Slot is uninitialized (nil).
      (t
-      (let ((promise (lazy-slot--init-async-slot obj slot opts promise-thunk)))
+      (let ((promise (lazy-slot--init-async-slot obj slot opts promise-thunk-form)))
         (car (concur:await promise (lazy-slot-opts-timeout opts) t)))))))
 
 (defun lazy-slot--get-cache-key (prefix type slot obj)
@@ -226,49 +233,52 @@ Results:
   (declare (indent 2) (debug t))
   (let* ((getter (intern (format "%s-%s" type slot)))
          (setter (intern (format "setf-%s-%s" type slot)))
-         (cacheus-fn-sym (when cache-options (gensym (format "lazy-%s-%s-" type slot)))))
+         (obj-sym (gensym "obj"))) ; Generate a unique symbol for the obj parameter
     `(progn
        ;; Register the definition for introspection by other functions.
        (lazy-slot--register-definition ',type ',slot
                                        '(:is-async nil
-                                         :body ,body
-                                         :cache-options ,cache-options
-                                         :cacheus-fn-sym ,cacheus-fn-sym))
-
-       ;; Define the memoized function if caching is enabled.
-       ,@(when cacheus-fn-sym
-           `((cacheus-memoize! ,cacheus-fn-sym (obj)
-               :key-fn (lambda (obj) (lazy-slot--get-cache-key 'lazy-slot-sync ',type ',slot obj))
-               ,@cache-options
-               ,body)))
+                                         :body ',body ; Quote body for storage
+                                         :cache-options ,cache-options))
 
        ;; Define the main getter function.
-       (defun ,getter (obj)
-         ;; IMPORTANT: Use `symbol-name` or `princ` for `format` args that are already symbols,
-         ;; to prevent Emacs from trying to interpret them as type specs during compilation.
-         ,(format "Synchronous lazy getter for slot %S of type %s." slot (symbol-name type))
-         (if ',cacheus-fn-sym
-             (funcall ',cacheus-fn-sym obj)
-           (or (cl-struct-slot-value ,type ',slot obj) ; Fix: Unquote type
-               (setf (cl-struct-slot-value ,type ',slot obj) ,body)))) ; Fix: Unquote type
+       (defun ,getter (,obj-sym)
+         ;; Corrected: Use `format` to construct the docstring at runtime.
+         (format "Synchronous lazy getter for slot %S of type %S." ',slot ',type)
+         ,(if cache-options
+              ;; If caching, the memoized function is defined outside and called.
+              ;; The memoized function itself handles the (obj) argument.
+              (let ((cacheus-fn-sym (gensym (format "lazy-%s-%s-" type slot))))
+                `(progn
+                   (cacheus-memoize! ,cacheus-fn-sym (,obj-sym)
+                     :key-fn (lambda (obj-arg) (lazy-slot--get-cache-key 'lazy-slot-sync ',type ',slot obj-arg))
+                     ,@cache-options
+                     (let ((obj ,obj-sym)) ,body)) ; Bind obj-sym to obj in body
+                   (funcall ,cacheus-fn-sym ,obj-sym)))
+            ;; If no caching, handle the non-memoized logic directly.
+            `(or (cl-struct-slot-value ,type ',slot ,obj-sym)
+                 (setf (cl-struct-slot-value ,type ',slot ,obj-sym)
+                       (let ((obj ,obj-sym)) ,body))))) ; Bind obj-sym to obj in body
 
        ;; Define a standard setter, unless one already exists.
        (unless (fboundp ',setter)
-         (cl-defun ,setter (val obj)
-           ,(format "Set the value of slot `%S' for an object of type `%s'." slot (symbol-name type)) ; Fix: Use symbol-name
-           (setf (cl-struct-slot-value ,type ',slot obj) val)))))) ; Fix: Unquote type
+         (cl-defun ,setter (val ,obj-sym)
+           ;; Corrected: Use `format` to construct the docstring at runtime.
+           (format "Set the value of slot `%S' for an object of type `%S'." ',slot ',type)
+           (setf (cl-struct-slot-value ,type ',slot ,obj-sym) val))))))
 
 ;;;###autoload
 (cl-defmacro lazy-slot-async! (slot type fn-body &key options constructor cache-options)
   "Define a lazy asynchronous accessor for SLOT in struct TYPE.
 This is a low-level macro, usually called by `lazy-slots!`.
 `FN-BODY` must be a lambda of the form `(lambda (obj callback) ...)`
-where `callback` should be called with the result.
+or a form that evaluates to one.
 
 Arguments:
 - `SLOT` (symbol): The slot name.
 - `TYPE` (symbol): The `cl-defstruct` type.
-- `FN-BODY` (form): A lambda form `(lambda (obj cb) ...)` for computation.
+- `FN-BODY` (form): A lambda form `(lambda (obj cb) ...)` for computation, or a form
+  that when evaluated produces such a lambda.
 - `:options` (plist): Options for `lazy-slot-opts` (e.g., :timeout, :auto-fetch).
 - `:constructor` (symbol): The struct's constructor, used to hook initialization.
 - `:cache-options` (plist): Options for `cacheus-memoize!`.
@@ -279,17 +289,22 @@ Results:
          (setter (intern (format "setf-%s-%s" type slot)))
          (init-fn (intern (format "%s--init-%s" type slot)))
          (ctor (or constructor (intern (format "make-%s" type))))
+         (obj-sym (gensym "obj")) ; Unique symbol for object parameter
          (cacheus-fn-sym (when cache-options (gensym (format "lazy-async-%s-%s-" type slot))))
-         (promise-thunk
-          `(lambda ()
-             ,(if cacheus-fn-sym
-                  `(funcall ',cacheus-fn-sym obj)
-                `(concur:from-callback (lambda (cb) (funcall ,fn-body obj cb)))))))
+         ;; The promise-thunk-form is now the raw lambda or a form that *produces* a lambda.
+         ;; lazy-slot--init-async-slot and lazy-slot--await-slot will funcall this form.
+         (promise-thunk-form
+          (if cacheus-fn-sym
+              `(funcall ',cacheus-fn-sym ,obj-sym) ; If caching, call the memoized function.
+            ;; If not caching, create a lambda for the promise generation that takes obj as arg
+            ;; and in turn calls the user's fn-body with obj and a callback.
+            `(lambda (,obj-sym)
+               (concur:from-callback (lambda (cb) (funcall ,fn-body ,obj-sym cb)))))))
     `(progn
        ;; Register the definition for introspection.
        (lazy-slot--register-definition ',type ',slot
                                        '(:is-async t
-                                         :fn-body ,fn-body
+                                         :fn-body ',fn-body ; Quote fn-body for storage
                                          :options ,options
                                          :cache-options ,cache-options
                                          :cacheus-fn-sym ,cacheus-fn-sym
@@ -297,39 +312,38 @@ Results:
 
        ;; Define the memoized function if caching is enabled.
        ,@(when cacheus-fn-sym
-           `((cacheus-memoize! ,cacheus-fn-sym (obj)
+           `((cacheus-memoize! ,cacheus-fn-sym (,obj-sym)
                :async t
-               :key-fn (lambda (obj) (lazy-slot--get-cache-key 'lazy-slot-async ',type ',slot obj))
+               :key-fn (lambda (obj-arg) (lazy-slot--get-cache-key 'lazy-slot-async ',type ',slot obj-arg))
                ,@cache-options
-               ;; The body for cacheus must return the promise.
-               (concur:from-callback (lambda (cb) (funcall ,fn-body obj cb))))))
+               ;; The body for cacheus must return the promise from the user's FN-BODY.
+               (concur:from-callback (lambda (cb) (funcall ,fn-body ,obj-sym cb))))))
 
        ;; Define the main blocking getter function.
-       (defun ,getter (obj)
-         ,(format "Asynchronous lazy getter for slot %S. Blocks until resolved and returns the value." slot) ; Fixed: No unquoting, just format symbol
-         (lazy-slot--await-slot obj ',slot (lazy-slot--parse-opts ,options) ,promise-thunk))
+       (defun ,getter (,obj-sym)
+         ;; Corrected: Use `format` to construct the docstring at runtime.
+         (format "Asynchronous lazy getter for slot %S. Blocks until resolved and returns the value." ',slot)
+         (lazy-slot--await-slot ,obj-sym ',slot (lazy-slot--parse-opts ,options) ,promise-thunk-form))
 
        ;; Define a standard setter.
        (unless (fboundp ',setter)
-         (cl-defun ,setter (val obj)
-           ,(format "Set the value of slot `%S' for an object of type `%s'." slot (symbol-name type)) ; Fix: Use symbol-name
-           (setf (cl-struct-slot-value ,type ',slot obj) val))) ; Fix: Unquote type
+         (cl-defun ,setter (val ,obj-sym)
+           ;; Corrected: Use `format` to construct the docstring at runtime.
+           (format "Set the value of slot `%S' for an object of type `%S'." ',slot ',type)
+           (setf (cl-struct-slot-value ,type ',slot ,obj-sym) val)))
 
        ;; Define the initializer function, which starts the async computation.
-       (defun ,init-fn (obj)
-         ;; Fix: The `obj` in the format string here refers to the *parameter* `obj`
-         ;; of the generated `init-fn`. So, it needs to be unquoted in the format string.
-         ;; We also need to unquote `slot` because it's a variable in the format string
-         ;; from the macro's scope.
-         ,(format "Initialize or re-fetch the asynchronous slot %S for instance %S." slot 'obj) ; Fix: Unquote slot, quote 'obj (the parameter)
-         (lazy-slot--init-async-slot obj ',slot (lazy-slot--parse-opts ,options) ,promise-thunk))
+       (defun ,init-fn (,obj-sym)
+         ;; Corrected: Use `format` to construct the docstring at runtime.
+         (format "Initialize or re-fetch the asynchronous slot %S for instance %S." ',slot ',obj-sym)
+         (lazy-slot--init-async-slot ,obj-sym ',slot (lazy-slot--parse-opts ,options) ,promise-thunk-form))
 
        ;; Advise the constructor to call the initializer automatically.
        (advice-add #',ctor :after
                    (lambda (&rest args)
                      ;; The return value of the constructor is the new object, which is the last arg.
                      (let ((new-obj (car (last args))))
-                       (when (typep new-obj ,type) ; Fix: Unquote type
+                       (when (typep new-obj ',type)
                          (funcall #',init-fn new-obj))))))))
 
 ;;;###autoload
@@ -341,21 +355,36 @@ way. Within the bodies of slots, you can use the symbol `obj` to
 refer to the object instance and `cb` (for async slots) for the
 callback.
 
-Example:
+Example Use for Synchronous (implicit `obj`):
   (lazy-slots!
     :type my-struct
-    :eager (id name)
-    :sync ((full-name (concat (my-struct-name obj) \" (\" (my-struct-id obj) \")\")))
-    :async ((data (fetch-data-for-id (my-struct-id obj) cb))))
+    :sync ((full-name (concat (my-struct-name obj) \" (\" (my-struct-id obj) \")\"))))
+  ;; In this case, `obj` inside the `concat` refers to the `my-struct` instance.
+
+Example Use for Asynchronous (explicit `lambda (obj cb)`):
+  (lazy-slots!
+    :type my-struct
+    :async ((data
+              (lambda (obj cb)
+                (message \"Fetching data for ID: %S\" (my-struct-id obj))
+                (run-at-time
+                 \"1s\" nil
+                 (lambda ()
+                   (funcall cb (format \"Data for ID: %S (Fetched at %s)\"
+                                       (my-struct-id obj) (current-time-string))))))
+              :options (:auto-fetch t :timeout 5.0)
+              :cache-options (:ttl 3600 :version \"1.0\"))))
+  ;; Here, `obj` and `cb` are explicit parameters to your lambda.
 
 Arguments:
 - `:type` (symbol): The `cl-defstruct` type.
 - `:eager` (list): A list of slot symbols for standard (eager) accessors.
 - `:async` (list): A list of async slot definitions.
-  Each element is `(SLOT-NAME (BODY-FORM) &rest PLIST-OPTS)`. The macro
-  wraps `BODY-FORM` in `(lambda (obj cb) ...)`.
+  Each element is `(SLOT-NAME BODY-FORM &rest PLIST-OPTS)`. `BODY-FORM`
+  should be a lambda `(lambda (obj cb) ...)`, or a form that evaluates to one.
 - `:sync` (list): A list of sync slot definitions.
-  Each element is `(SLOT-NAME (BODY-FORM) &rest PLIST-OPTS)`.
+  Each element is `(SLOT-NAME BODY-FORM &rest PLIST-OPTS)`. `BODY-FORM`
+  can directly use the `obj` anaphor.
 Results:
 - A `progn` form defining all specified accessors."
   (declare (indent 1))
@@ -363,27 +392,27 @@ Results:
      ;; Generate standard accessors for eager slots.
      ,@(--map `(progn
                 (defun ,(intern (format "%s-%s" type it)) (obj)
-                  (cl-struct-slot-value ,type ',it obj)) ; Fix: Unquote type
+                  (format "Eager getter for slot %S of type %S." ',it ',type)
+                  (cl-struct-slot-value ,type ',it obj))
                 (cl-defun ,(intern (format "setf-%s-%s" type it)) (val obj)
-                  (setf (cl-struct-slot-value ,type ',it obj) val))) ; Fix: Unquote type
+                  (format "Eager setter for slot %S of type %S." ',it ',type)
+                  (setf (cl-struct-slot-value ,type ',it obj) val)))
               eager)
 
      ;; Generate lazy synchronous accessors.
      ,@(--map (let* ((slot (car it))
-                     (raw-body (cadr it))
+                     (body (cadr it))
                      (opts (cddr it)))
-               `(lazy-slot-sync! ,slot ,type ,raw-body ,@opts)) ; Fix: Unquote type
+               ;; The body is now a raw form, not a lambda itself for sync slots.
+               `(lazy-slot-sync! ,slot ,type ,body ,@opts))
               sync)
 
      ;; Generate lazy asynchronous accessors.
      ,@(--map (let* ((slot (car it))
-                     (raw-body (cadr it))
+                     (fn-body (cadr it))
                      (opts (cddr it)))
-               `(lazy-slot-async! ,slot ,type
-                                  ;; raw-body is already the form that uses obj and cb.
-                                  ;; The outer macro adds the lambda.
-                                  '(lambda (obj cb) ,raw-body)
-                                  ,@opts))
+               ;; fn-body is the lambda (lambda (obj cb) ...), pass it directly.
+               `(lazy-slot-async! ,slot ,type ,fn-body ,@opts))
               async)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -426,19 +455,20 @@ Results:
              slot type))
 
     (let* ((is-async (plist-get definition :is-async))
-           (body (plist-get definition :body))
-           (fn-body (plist-get definition :fn-body))
+           (body-form (plist-get definition :body)) ; For sync
+           (fn-body-form (plist-get definition :fn-body)) ; For async
            (cacheus-fn (plist-get definition :cacheus-fn-sym))
            (opts (lazy-slot--parse-opts (or options (plist-get definition :options))))
-           (promise-thunk
-            (lambda ()
+           (promise-thunk-form
+            (lambda (obj-arg) ; This thunk itself takes obj as an arg
               (if cacheus-fn
-                  (funcall cacheus-fn obj)
+                  (funcall cacheus-fn obj-arg)
                 (if is-async
-                    (concur:from-callback (lambda (cb) (funcall fn-body obj cb)))
-                  ;; For sync slots, we create a resolved promise.
-                  (concur:resolved! (let ((obj obj)) (eval body))))))))
-      (lazy-slot--init-async-slot obj slot opts promise-thunk))))
+                    (concur:from-callback (lambda (cb) (funcall fn-body-form obj-arg cb)))
+                  ;; For sync slots, we create a resolved promise from evaluating the body.
+                  ;; The `obj` in `(let ((obj obj-arg)) (eval body-form))` now correctly refers to obj-arg.
+                  (concur:resolved! (let ((obj obj-arg)) (eval body-form))))))))
+      (lazy-slot--init-async-slot obj slot opts promise-thunk-form))))
 
 ;;;###autoload
 (defun lazy-slot-clear-cache (obj slot)
