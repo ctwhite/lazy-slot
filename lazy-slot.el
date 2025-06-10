@@ -57,7 +57,7 @@
 ;;   - **Persistence:** Save/load cached values across Emacs sessions.
 ;;
 ;; - **`concur` Integration:** Asynchronous operations rely on `concur` for
-;;   futures and promises. `concur:timeout` and `concur:retry` are used
+;;   futures and and promises. `concur:timeout` and `concur:retry` are used
 ;;   to enhance the robustness of async slot computations.
 ;;
 ;; **Core Functionality:**
@@ -101,25 +101,23 @@
 (defconst lazy-slot-version "0.9.1"
   "Version of the `lazy-slot.el` library.")
 
-(defgroup lazy-slot nil
-  "Lazy struct slot library for Emacs."
-  :group 'lisp) 
+(defgroup lazy-slot nil "Lazy struct slot library for Emacs." :group 'lisp)
 
 (defcustom lazy-slot-log-hook nil
   "Hook run for logging messages within the Lazy Slot library.
 
-This hook allows users to integrate `lazy-slot`'s internal logging with their
-preferred logging system (e.g., `s.el`'s logging, `message` to the echo area).
-Functions added to this hook should accept a `LEVEL` symbol, a `FORMAT-STRING`,
-and any additional `ARGS` for the format string.
+  This hook allows users to integrate `lazy-slot`'s internal logging with their
+  preferred logging system (e.g., `s.el`'s logging, `message` to the echo area).
+  Functions added to this hook should accept a `LEVEL` symbol, a `FORMAT-STRING`,
+  and any additional `ARGS` for the format string.
 
-Arguments:
-- `LEVEL` (symbol): The log level, e.g., `:debug`, `:info`, `:warn`, `:error`.
-- `FORMAT-STRING` (string): The format-control string for the message.
-- `ARGS` (rest): Arguments for the format string.
+  Arguments:
+    LEVEL (symbol): The log level, e.g., `:debug`, `:info`, `:warn`, `:error`.
+    FORMAT-STRING (string): The format-control string for the message.
+    ARGS (list): Arguments for the format string.
 
-Example:
-  (add-hook 'lazy-slot-log-hook (lambda (level fmt &rest args)
+  Example:
+    (add-hook 'lazy-slot-log-hook (lambda (level fmt &rest args)
                                    (apply #'message (format \"[Lazy-Slot %s] %s\" level fmt) args)))"
   :type 'hook
   :group 'lazy-slot)
@@ -127,35 +125,37 @@ Example:
 (defvar lazy-slot--definitions (ht-create)
   "Internal hash table for storing lazy slot definitions.
 
-Keys are `cons` cells `(TYPE . SLOT)` where `TYPE` is the `cl-defstruct`
-type symbol and `SLOT` is the lazy slot symbol.
-Values are property lists (`plist`) containing the details of the lazy slot's
-definition, such as its body expression, options, and cache configuration.
-This allows the library to retrieve the original computation logic when a
-lazy slot is accessed for the first time.")
+  Keys are `cons` cells `(TYPE . SLOT)` where `TYPE` is the `cl-defstruct`
+  type symbol and `SLOT` is the lazy slot symbol.
+  Values are property lists (`plist`) containing the details of the lazy slot's
+  definition, such as its body expression, options, and cache configuration.
+  This allows the library to retrieve the original computation logic when a
+  lazy slot is accessed for the first time.")
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Definitions
 
-(cl-defstruct (lazy-slot-opts
-               (:constructor lazy-slot--make-opts))
+(cl-defstruct (lazy-slot-opts (:constructor lazy-slot--make-opts))
   "Configuration options for asynchronous lazy slot resolution.
 
-This struct holds parameters that control the behavior of async slots,
-such as when they should fetch, how long to wait, and retry policies.
+  This struct holds parameters that control the behavior of async slots,
+  such as when they should fetch, how long to wait, and retry policies.
 
-Fields:
-- `auto-fetch` (boolean): If `t`, the slot's value will be fetched
-  asynchronously in the background immediately after the object is
-  initialized. If `nil`, the fetch is delayed until the slot is first
-  accessed via its getter. Defaults to `t`.
-- `timeout` (number | nil): Maximum time in seconds to wait for the
-  asynchronous result to resolve before signaling a timeout error.
-  If `nil`, there is no explicit timeout. This integrates with `concur:timeout`.
-- `retry` (plist | nil): A plist of options for `concur:retry`. If
-  provided, the asynchronous computation will be retried automatically
-  if it fails. Examples: `(:count 3 :delay 0.5)`. If `nil`, no retries.
-  This specifies the retry policy for the underlying promise."
+  Fields:
+    auto-fetch (boolean): If `t`, the slot's value will be fetched
+                          asynchronously in the background immediately after
+                          the object is initialized. If `nil`, the fetch is
+                          delayed until the slot is first accessed via its
+                          getter. Defaults to `t`.
+    timeout (number | nil): Maximum time in seconds to wait for the
+                            asynchronous result to resolve before signaling a
+                            timeout error. If `nil`, there is no explicit timeout.
+                            This integrates with `concur:timeout`.
+    retry (plist | nil): A plist of options for `concur:retry`. If provided,
+                         the asynchronous computation will be retried
+                         automatically if it fails. Examples: `(:count 3 :delay 0.5)`.
+                         If `nil`, no retries. This specifies the retry policy
+                         for the underlying promise.")
   (auto-fetch t :type boolean)
   (timeout nil :type (or null number))
   (retry nil :type (or null list)))
@@ -166,35 +166,35 @@ Fields:
 (defun lazy-slot--log (level format-string &rest args)
   "Internal logging helper for the `lazy-slot` library.
 
-This function dispatches log messages to `lazy-slot-log-hook` if it's
-configured, allowing external modules to consume and display `lazy-slot`'s
-internal messages.
+  This function dispatches log messages to `lazy-slot-log-hook` if it's
+  configured, allowing external modules to consume and display `lazy-slot`'s
+  internal messages.
 
-Arguments:
-- `LEVEL` (symbol): The severity of the message (e.g., `:debug`, `:info`,
-  `:warn`, `:error`).
-- `FORMAT-STRING` (string): The format string for the message.
-- `ARGS` (list): Arguments for the format string.
+  Arguments:
+    LEVEL (symbol): The severity of the message (e.g., `:debug`, `:info`,
+                    `:warn`, `:error`).
+    FORMAT-STRING (string): The format string for the message.
+    ARGS (list): Arguments for the format string.
 
-Results:
-- None."
+  Returns:
+    nil."
   (apply #'run-hook-with-args 'lazy-slot-log-hook level format-string args))
 
 (defun lazy-slot--register-definition (type slot def-plist)
   "Register the definition plist `DEF-PLIST` for SLOT on TYPE.
 
-This function stores the metadata for a lazy slot, including its computation
-body, configuration options, and caching details. This metadata is later
-retrieved when the slot needs to be computed or its status queried.
+  This function stores the metadata for a lazy slot, including its computation
+  body, configuration options, and caching details. This metadata is later
+  retrieved when the slot needs to be computed or its status queried.
 
-Arguments:
-- `TYPE` (symbol): The `cl-defstruct` type symbol (e.g., `my-struct`).
-- `SLOT` (symbol): The lazy slot name (e.g., `data-cache`).
-- `DEF-PLIST` (plist): The property list containing all definition details
-  (e.g., `:is-async`, `:body`, `:cache-options`).
+  Arguments:
+    TYPE (symbol): The `cl-defstruct` type symbol (e.g., `my-struct`).
+    SLOT (symbol): The lazy slot name (e.g., `data-cache`).
+    DEF-PLIST (plist): The property list containing all definition details
+                       (e.g., `:is-async`, `:body`, `:cache-options`).
 
-Results:
-- The provided `DEF-PLIST`."
+  Returns:
+    (plist): The provided `DEF-PLIST`."
   (lazy-slot--log :debug "Registering lazy slot definition: Type=%S, Slot=%S, Def=%S"
                   type slot def-plist)
   (ht-set! lazy-slot--definitions (cons type slot) def-plist))
@@ -202,76 +202,80 @@ Results:
 (defun lazy-slot--get-definition (type slot)
   "Retrieve the definition plist for SLOT on TYPE.
 
-This function looks up the stored metadata for a given lazy slot, which was
-registered during the `lazy-slots!` macro expansion.
+  This function looks up the stored metadata for a given lazy slot, which was
+  registered during the `lazy-slots!` macro expansion.
 
-Arguments:
-- `TYPE` (symbol): The `cl-defstruct` type symbol.
-- `SLOT` (symbol): The lazy slot name.
+  Arguments:
+    TYPE (symbol): The `cl-defstruct` type symbol.
+    SLOT (symbol): The lazy slot name.
 
-Results:
-- The definition plist (a `plist`), or `nil` if no definition is found for
-  the specified slot on that type."
+  Returns:
+    (plist | nil): The definition plist (a `plist`), or `nil` if no definition
+                   is found for the specified slot on that type."
   (ht-get lazy-slot--definitions (cons type slot)))
 
 (defun lazy-slot--parse-opts (options)
   "Create a `lazy-slot-opts` struct from an OPTIONS plist or lambda.
 
-This helper normalizes the `:options` argument provided in `lazy-slot-async!`
-into a structured `lazy-slot-opts` object for easier access to configuration.
+  This helper normalizes the `:options` argument provided in `lazy-slot-async!`
+  into a structured `lazy-slot-opts` object for easier access to configuration.
 
-Arguments:
-- `OPTIONS` (plist | function): A `plist` containing option keywords (e.g.,
-  `:timeout`, `:auto-fetch`) or a zero-argument function that returns such a
-  `plist`.
+  Arguments:
+    OPTIONS (plist | function): A `plist` containing option keywords (e.g.,
+                               `:timeout`, `:auto-fetch`) or a zero-argument
+                               function that returns such a `plist`.
 
-Results:
-- A `lazy-slot-opts` struct populated with the parsed options."
+  Returns:
+    (lazy-slot-opts): A `lazy-slot-opts` struct populated with the parsed options."
   (let ((opts (if (functionp options) (funcall options) options)))
     (unless (or (null opts) (plistp opts))
       (lazy-slot--log :warn "lazy-slot: OPTIONS expected to be a plist or lambda. Got: %S" opts)
       (setq opts nil)) ; Fallback to nil if invalid
-    (apply #'lazy-slot--make-opts (append opts nil)))) ; `append opts nil` ensures it's a valid plist even if opts is nil
+    ;; `append opts nil` ensures it's a valid plist even if opts is nil
+    (apply #'lazy-slot--make-opts (append opts nil))))
 
 (defun lazy-slot--substitute-anaphor (form anaphor replacement)
   "Recursively replace an ANAPHOR symbol in FORM with a REPLACEMENT symbol.
 
-This function is used during macro expansion to replace the special `obj`
-and `cb` symbols (anaphors) in the user-provided slot computation body
-with the actual gensymmed variables used in the generated code.
+  This function is used during macro expansion to replace the special `obj`
+  and `cb` symbols (anaphors) in the user-provided slot computation body
+  with the actual gensymmed variables used in the generated code.
 
-Arguments:
-- `FORM` (any): The Lisp form to traverse.
-- `ANAPHOR` (symbol): The symbol to find (e.g., `obj`, `cb`).
-- `REPLACEMENT` (symbol): The symbol to substitute with (e.g., `obj-sym-123`).
+  Arguments:
+    FORM (any): The Lisp form to traverse.
+    ANAPHOR (symbol): The symbol to find (e.g., `obj`, `cb`).
+    REPLACEMENT (symbol): The symbol to substitute with (e.g., `obj-sym-123`).
 
-Results:
-- A new form with substitutions applied."
+  Returns:
+    (any): A new form with substitutions applied."
   (cond
    ((eq form anaphor) replacement) ; Direct match, replace.
    ((atom form) form) ; Base case: atom, return as is.
-   (t (cons (lazy-slot--substitute-anaphor (car form) anaphor replacement) ; Recurse into car
-            (lazy-slot--substitute-anaphor (cdr form) anaphor replacement))))) ; Recurse into cdr
+   ((consp form)
+    ;; Recurse into car and cdr for cons cells.
+    (cons (lazy-slot--substitute-anaphor (car form) anaphor replacement)
+          (lazy-slot--substitute-anaphor (cdr form) anaphor replacement)))
+   (t form))) ; Default case for other types (e.g., vectors, strings)
 
 (defun lazy-slot--init-async-slot (obj slot opts promise-thunk-form)
   "Initialize an asynchronous SLOT on OBJ using PROMISE-THUNK-FORM and OPTS.
 
-This function orchestrates the background computation for an async slot.
-It takes the user-provided computation (wrapped in `promise-thunk-form`),
-applies any `timeout` or `retry` policies, converts the resulting promise
-into a `concur` future, and stores this future in the object's slot.
-If `auto-fetch` is enabled, it immediately starts the computation.
+  This function orchestrates the background computation for an async slot.
+  It takes the user-provided computation (wrapped in `promise-thunk-form`),
+  applies any `timeout` or `retry` policies, converts the resulting promise
+  into a `concur` future, and stores this future in the object's slot.
+  If `auto-fetch` is enabled, it immediately starts the computation.
 
-Arguments:
-- `OBJ` (cl-struct): The object instance whose slot is being initialized.
-- `SLOT` (symbol): The slot name to initialize.
-- `OPTS` (lazy-slot-opts): The parsed options for this async slot.
-- `PROMISE-THUNK-FORM` (function): A zero-argument function (`lambda () ...`)
-  that, when called, returns a `concur` promise representing the lazy
-  slot's computation.
+  Arguments:
+    OBJ (cl-struct): The object instance whose slot is being initialized.
+    SLOT (symbol): The slot name to initialize.
+    OPTS (lazy-slot-opts): The parsed options for this async slot.
+    PROMISE-THUNK-FORM (function): A zero-argument function (`lambda () ...`)
+                                  that, when called, returns a `concur` promise
+                                  representing the lazy slot's computation.
 
-Results:
-- The processed `concur` promise (which the future wraps)."
+  Returns:
+    (concur-promise): The processed `concur` promise (which the future wraps)."
   (lazy-slot--log :debug "Initializing async slot %S on %S. Options: %S" slot obj opts)
   (let* ((base-promise (funcall promise-thunk-form)) ; Execute the thunk to get the raw promise.
          (timeout (lazy-slot-opts-timeout opts))
@@ -300,22 +304,22 @@ Results:
 (defun lazy-slot--await-slot (obj slot opts promise-thunk-form)
   "Synchronously fetch or return cached value of OBJ's SLOT.
 
-This is the core blocking getter for asynchronous lazy slots. When an async
-slot is accessed, this function checks its current state:
-1. If the slot already holds a resolved value, it returns it directly.
-2. If the slot holds a pending `concur` future, it blocks Emacs until that
-   future resolves (or times out), then returns the resolved value.
-3. If the slot is uninitialized, it calls `lazy-slot--init-async-slot` to
-   start the computation and then blocks, waiting for the result.
+  This is the core blocking getter for asynchronous lazy slots. When an async
+  slot is accessed, this function checks its current state:
+  1. If the slot already holds a resolved value, it returns it directly.
+  2. If the slot holds a pending `concur` future, it blocks Emacs until that
+     future resolves (or times out), then returns the resolved value.
+  3. If the slot is uninitialized, it calls `lazy-slot--init-async-slot` to
+     start the computation and then blocks, waiting for the result.
 
-Arguments:
-- `OBJ` (cl-struct): The object instance.
-- `SLOT` (symbol): The slot to await.
-- `OPTS` (lazy-slot-opts): The parsed options for this operation.
-- `PROMISE-THUNK-FORM` (function): A zero-argument function that returns a promise.
+  Arguments:
+    OBJ (cl-struct): The object instance.
+    SLOT (symbol): The slot to await.
+    OPTS (lazy-slot-opts): The parsed options for this operation.
+    PROMISE-THUNK-FORM (function): A zero-argument function that returns a promise.
 
-Results:
-- The resolved value of the slot (blocking if necessary)."
+  Returns:
+    (any): The resolved value of the slot (blocking if necessary)."
   (lazy-slot--log :debug "Attempting to await slot %S on %S." slot obj)
   (let ((val (cl-struct-slot-value (type-of obj) slot obj)))
     (cond
@@ -339,22 +343,23 @@ Results:
 (defun lazy-slot--get-cache-key (prefix type slot obj)
   "Generate a standardized cache key for a given slot.
 
-This function constructs a unique key for `cacheus` based on the slot's
-context. This key is used for memoization and cache invalidation.
+  This function constructs a unique key for `cacheus` based on the slot's
+  context. This key is used for memoization and cache invalidation.
 
-Arguments:
-- `PREFIX` (symbol): A symbol to distinguish different types of lazy slots
-  in the cache (e.g., `'lazy-slot-sync`, `'lazy-slot-async`).
-- `TYPE` (symbol): The `cl-defstruct` type symbol (e.g., `my-data-struct`).
-- `SLOT` (symbol): The slot name (e.g., `computed-data`).
-- `OBJ` (cl-struct): The object instance. `object-hash` is used to get a
-  unique identifier for the object itself, ensuring different instances
-  have different cache entries.
+  Arguments:
+    PREFIX (symbol): A symbol to distinguish different types of lazy slots
+                     in the cache (e.g., `'lazy-slot-sync`, `'lazy-slot-async`).
+    TYPE (symbol): The `cl-defstruct` type symbol (e.g., `my-data-struct`).
+    SLOT (symbol): The slot name (e.g., `computed-data`).
+    OBJ (cl-struct): The object instance. `object-hash` is used to get a
+                     unique identifier for the object itself, ensuring different
+                     instances have different cache entries.
 
-Results:
-- A `list` suitable for use as a `cacheus` key. Example: `(lazy-slot-async my-data-struct computed-data 123456)`.
-  This structure allows `cacheus` to effectively manage cached values keyed by
-  the object instance and slot name."
+  Returns:
+    (list): A `list` suitable for use as a `cacheus` key. Example:
+            `(lazy-slot-async my-data-struct computed-data 123456)`.
+            This structure allows `cacheus` to effectively manage cached values
+            keyed by the object instance and slot name."
   (list prefix type slot (object-hash obj)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -364,27 +369,30 @@ Results:
 (cl-defmacro lazy-slot-sync! (slot type body &key cache-options)
   "Define a lazy synchronous accessor for SLOT in struct TYPE.
 
-This is a low-level macro, usually called by `lazy-slots!`. It defines a
-getter function that computes the slot's value only on first access and caches
-it directly in the slot. If `cache-options` are provided, the computation is
-additionally memoized by `cacheus`.
+  This is a low-level macro, usually called by `lazy-slots!`. It defines a
+  getter function that computes the slot's value only on first access and caches
+  it directly in the slot. If `cache-options` are provided, the computation is
+  additionally memoized by `cacheus`.
 
-Arguments:
-- `SLOT` (symbol): The name of the slot to define (e.g., `computed-field`).
-- `TYPE` (symbol): The `cl-defstruct` type symbol (e.g., `my-data-struct`).
-- `BODY` (form): The Emacs Lisp expression that computes the slot's value.
-  Within this `BODY`, the symbol `obj` is bound to the current object instance.
-- `:cache-options` (plist, optional): A `plist` of options to pass directly
-  to `cacheus-memoize!`. This enables advanced caching features like TTL,
-  persistence, and versioning for the slot's computed value.
+  Arguments:
+    SLOT (symbol): The name of the slot to define (e.g., `computed-field`).
+    TYPE (symbol): The `cl-defstruct` type symbol (e.g., `my-data-struct`).
+    BODY (form): The Emacs Lisp expression that computes the slot's value.
+                 Within this `BODY`, the symbol `obj` is bound to the current
+                 object instance.
+    :cache-options (plist, optional): A `plist` of options to pass directly
+                                     to `cacheus-memoize!`. This enables
+                                     advanced caching features like TTL,
+                                     persistence, and versioning for the slot's
+                                     computed value.
 
-Results:
-- A `progn` form defining the getter and setter functions for the slot.
-  The getter will implement the lazy evaluation logic."
-  (declare (indent 2)) 
-  (let* ((getter (intern (format "%s-%s" type slot))) ; Generate standard getter name (e.g., `my-struct-computed-field`).
-         (setter (intern (format "setf-%s-%s" type slot))) ; Generate standard setter name (e.g., `setf-my-struct-computed-field`).
-         (obj-sym (gensym "obj-"))) 
+  Returns:
+    (progn): A `progn` form defining the getter and setter functions for the slot.
+             The getter will implement the lazy evaluation logic."
+  (declare (indent 2))
+  (let* ((getter (intern (format "%s-%s" type slot))) ; e.g., `my-struct-computed-field`
+         (setter (intern (format "setf-%s-%s" type slot))) ; e.g., `setf-my-struct-computed-field`
+         (obj-sym (gensym "obj-")))
     `(progn
        ;; Register the slot's definition for later introspection or re-fetching.
        (lazy-slot--register-definition ',type ',slot
@@ -400,10 +408,11 @@ Results:
                 `(progn
                    ;; Define a memoized function that computes the slot value.
                    (cacheus-memoize! ,cacheus-fn-sym (,obj-sym)
-                     :key-fn (lambda (obj-arg) (lazy-slot--get-cache-key 'lazy-slot-sync ',type ',slot obj-arg))
+                     :key-fn (lambda (obj-arg)
+                               (lazy-slot--get-cache-key 'lazy-slot-sync ',type ',slot obj-arg))
                      :async nil ; Mark as synchronous for cacheus.
                      ,@cache-options ; Pass through user-defined cache options.
-                     (let ((obj ,obj-sym)) ,body)) ; Bind `obj` anaphor within the memoized function.
+                     (let ((obj ,obj-sym)) ,body)) ; Bind `obj` anaphor.
                    ;; Call the memoized function to get the value.
                    (funcall ,cacheus-fn-sym ,obj-sym)))
             ;; If no cache-options, use simple in-slot caching (set-once behavior).
@@ -421,64 +430,53 @@ Results:
 (cl-defmacro lazy-slot-async! (slot type fn-body &key options constructor cache-options)
   "Define a lazy asynchronous accessor for SLOT in struct TYPE.
 
-This is a low-level macro, usually called by `lazy-slots!`. It defines a
-getter function that manages asynchronous computation via `concur` futures.
-The computation is triggered either on object initialization (`:auto-fetch`)
-or on first access.
+  This is a low-level macro, usually called by `lazy-slots!`. It defines a
+  getter function that manages asynchronous computation via `concur` futures.
+  The computation is triggered either on object initialization (`:auto-fetch`)
+  or on first access.
 
-Arguments:
-- `SLOT` (symbol): The name of the slot to define.
-- `TYPE` (symbol): The `cl-defstruct` type symbol.
-- `FN-BODY` (form): The Emacs Lisp expression that performs the asynchronous
-  computation. This must be a form that typically calls a function taking a
-  callback. Within `FN-BODY`, the special symbols `obj` (the object instance)
-  and `cb` (the callback function to call with the result) are available as anaphors.
-  Example: `(my-async-api-call (my-struct-id obj) cb)`.
-- `:options` (plist, optional): A `plist` of options for `lazy-slot-opts`,
-  controlling `auto-fetch`, `timeout`, and `retry` behavior for async resolution.
-- `:constructor` (symbol, optional): The `cl-defstruct`'s constructor function
-  (e.g., `make-my-struct`). If provided, `lazy-slot-async!` will advise this
-  constructor to automatically initiate the async fetch if `:auto-fetch` is `t`.
-  Defaults to `(intern (format \"make-%s\" type))`.
-- `:cache-options` (plist, optional): Options for `cacheus-memoize!`, applied
-  to the asynchronous computation. This allows caching of async results.
+  Arguments:
+    SLOT (symbol): The name of the slot to define.
+    TYPE (symbol): The `cl-defstruct` type symbol.
+    FN-BODY (form): The Emacs Lisp expression that performs the asynchronous
+                    computation. This must be a form that typically calls a
+                    function taking a callback. Within `FN-BODY`, the special
+                    symbols `obj` (the object instance) and `cb` (the callback
+                    function to call with the result) are available as anaphors.
+                    Example: `(my-async-api-call (my-struct-id obj) cb)`.
+    :options (plist, optional): A `plist` of options for `lazy-slot-opts`,
+                               controlling `auto-fetch`, `timeout`, and `retry`
+                               behavior for async resolution.
+    :constructor (symbol, optional): The `cl-defstruct`'s constructor function
+                                    (e.g., `make-my-struct`). If provided,
+                                    `lazy-slot-async!` will advise this
+                                    constructor to automatically initiate the
+                                    async fetch if `:auto-fetch` is `t`.
+                                    Defaults to `(intern (format \"make-%s\" type))`.
+    :cache-options (plist, optional): Options for `cacheus-memoize!`, applied
+                                     to the asynchronous computation. This
+                                     allows caching of async results.
 
-Results:
-- A `progn` form defining the getter, setter, and an internal initializer function.
-  The getter will block until the async value is resolved.
-  An advice is added to the constructor to trigger `auto-fetch`.
-"
+  Returns:
+    (progn): A `progn` form defining the getter, setter, and an internal
+             initializer function. The getter will block until the async value
+             is resolved. An advice is added to the constructor to trigger
+             `auto-fetch`."
   (declare (indent 2))
   (let* ((getter (intern (format "%s-%s" type slot)))
          (setter (intern (format "setf-%s-%s" type slot)))
-         (init-fn (intern (format "%s--init-%s" type slot))) ; Internal function to initialize/re-fetch async slot
-         (ctor (or constructor (intern (format "make-%s" type)))) ; Determine the constructor function.
-         (obj-sym (gensym "obj-")) 
-         (cb-sym (gensym "cb-")) 
-         (cacheus-fn-sym (when cache-options (gensym (format "lazy-async-%s-%s-" type slot)))) ; Gensym for memoized function if caching.
-         ;; This `promise-thunk-form` is a zero-argument function that, when executed,
-         ;; either calls the memoized cacheus function (if caching is enabled) or
-         ;; directly wraps the user's `FN-BODY` into a `concur` promise.
-         (promise-thunk-form
-          `(lambda ()
-             ,(if cacheus-fn-sym
-                  ;; If caching is enabled, the computation goes through cacheus-memoize!.
-                  ;; The memoized function itself should return a promise.
-                  `(funcall ',cacheus-fn-sym ,obj-sym)
-                ;; If no caching, directly create a promise from the user's callback-style body.
-                `(concur:from-callback
-                  (lambda (,cb-sym)
-                    ;; Substitute `obj` and `cb` anaphors in the user's `FN-BODY` with the actual gensyms.
-                    ,(lazy-slot--substitute-anaphor
-                      (lazy-slot--substitute-anaphor fn-body 'obj obj-sym)
-                      'cb cb-sym)))))))
+         (init-fn (intern (format "%s--init-%s" type slot))) ; Internal init/re-fetch function
+         (ctor (or constructor (intern (format "make-%s" type)))) ; Determine the constructor
+         (obj-sym (gensym "obj-"))
+         (cb-sym (gensym "cb-"))
+         (cacheus-fn-sym (when cache-options (gensym (format "lazy-async-%s-%s-" type slot)))))
     `(progn
        ;; Register the slot's definition for later introspection or re-fetching.
        (lazy-slot--register-definition ',type ',slot
                                        '(:is-async t ; Mark as asynchronous.
                                          :fn-body ',fn-body ; Store original async body.
-                                         :options ,options ; Store lazy-slot-opts.
-                                         :cache-options ,cache-options ; Store cacheus options.
+                                         :options ',options ; Store lazy-slot-opts.
+                                         :cache-options ',cache-options ; Store cacheus options.
                                          :cacheus-fn-sym ,cacheus-fn-sym ; Store generated cacheus function symbol.
                                          :constructor ,ctor)) ; Store constructor for advice.
 
@@ -487,10 +485,12 @@ Results:
        ,@(when cacheus-fn-sym
            `((cacheus-memoize! ,cacheus-fn-sym (,obj-sym)
                :async t ; Crucially, tell cacheus this is an async memoization.
-               :key-fn (lambda (obj-arg) (lazy-slot--get-cache-key 'lazy-slot-async ',type ',slot obj-arg))
+               :key-fn (lambda (obj-arg)
+                         (lazy-slot--get-cache-key 'lazy-slot-async ',type ',slot obj-arg))
                ,@cache-options ; Pass user-defined cache options.
                ;; The body of the memoized function must return a promise.
                (concur:from-callback (lambda (,cb-sym)
+                                       ;; Substitute `obj` and `cb` anaphors in the user's `FN-BODY`.
                                        ,(lazy-slot--substitute-anaphor
                                          (lazy-slot--substitute-anaphor fn-body 'obj obj-sym)
                                          'cb cb-sym))))))
@@ -501,7 +501,14 @@ Results:
          ;; - If already resolved, return value.
          ;; - If pending, await its resolution.
          ;; - If uninitialized, trigger the async computation and await.
-         (lazy-slot--await-slot ,obj-sym ',slot (lazy-slot--parse-opts ,options) ,promise-thunk-form))
+         (lazy-slot--await-slot ,obj-sym ',slot (lazy-slot--parse-opts ,options)
+                                (lambda ()
+                                  (if ,cacheus-fn-sym
+                                      (funcall ,cacheus-fn-sym ,obj-sym)
+                                    (concur:from-callback
+                                     (lambda (,cb-sym)
+                                       (let ((obj ,obj-sym) (cb ,cb-sym))
+                                         ,(lazy-slot--substitute-anaphor fn-body 'obj 'obj))))))))
 
        ;; Define a standard setter function for the slot.
        (unless (fboundp ',setter)
@@ -513,7 +520,14 @@ Results:
        (defun ,init-fn (,obj-sym)
          ,(format "Initialize or re-fetch async slot %S for instance %S." slot obj-sym)
          ;; This directly calls `lazy-slot--init-async-slot` to trigger the background fetch.
-         (lazy-slot--init-async-slot ,obj-sym ',slot (lazy-slot--parse-opts ,options) ,promise-thunk-form))
+         (lazy-slot--init-async-slot ,obj-sym ',slot (lazy-slot--parse-opts ,options)
+                                     (lambda ()
+                                       (if ,cacheus-fn-sym
+                                           (funcall ,cacheus-fn-sym ,obj-sym)
+                                         (concur:from-callback
+                                          (lambda (,cb-sym)
+                                            (let ((obj ,obj-sym) (cb ,cb-sym))
+                                              ,(lazy-slot--substitute-anaphor fn-body 'obj 'obj)))))))))
 
        ;; Add an advice to the struct's constructor. This ensures that if `:auto-fetch`
        ;; is enabled, the async computation starts immediately when a new object is created.
@@ -522,65 +536,68 @@ Results:
                      ;; The newly created object is always the last argument passed to the constructor.
                      (let ((new-obj (car (last args))))
                        (when (typep new-obj ',type) ; Ensure it's an instance of the correct struct type.
-                         (funcall #',init-fn new-obj)))))))) ; Call the internal initializer.
+                         (funcall #',init-fn new-obj))))))))
 
 ;;;###autoload
 (cl-defmacro lazy-slots! (&key type eager async sync)
   "Define a set of accessor functions for a struct of `TYPE`.
 
-This macro serves as the primary declarative interface for defining lazy and
-eager slots. It consolidates the definition of various types of accessors
-(standard eager, lazy synchronous, lazy asynchronous) for a single `cl-defstruct`
-type into one convenient block.
+  This macro serves as the primary declarative interface for defining lazy and
+  eager slots. It consolidates the definition of various types of accessors
+  (standard eager, lazy synchronous, lazy asynchronous) for a single `cl-defstruct`
+  type into one convenient block.
 
-Within the `BODY-FORM` of synchronous and asynchronous slot definitions,
-you can use the special symbol `obj` to refer to the current object instance.
-For asynchronous slots, `cb` is also available as the callback function.
+  Within the `BODY-FORM` of synchronous and asynchronous slot definitions,
+  you can use the special symbol `obj` to refer to the current object instance.
+  For asynchronous slots, `cb` is also available as the callback function.
 
-Arguments:
-- `:type` (symbol): The `cl-defstruct` type symbol for which slots are being defined.
-- `:eager` (list, optional): A list of slot symbols for which standard (eager)
-  accessors should be defined. These slots are like regular `cl-defstruct` slots.
-  Each element is a slot symbol (e.g., `(field1 field2)`).
-- `:async` (list, optional): A list of asynchronous lazy slot definitions.
-  Each element is a list `(SLOT-NAME FN-BODY &rest PLIST-OPTS)`, where:
-    - `SLOT-NAME`: The symbol for the async slot.
-    - `FN-BODY`: The expression defining the asynchronous computation. `obj` and `cb`
-      anaphors are available here. This body should eventually call `cb` with the result.
-    - `PLIST-OPTS`: Optional `plist` for `lazy-slot-async!` (e.g., `:options`, `:cache-options`).
-- `:sync` (list, optional): A list of synchronous lazy slot definitions.
-  Each element is a list `(SLOT-NAME BODY-FORM &rest PLIST-OPTS)`, where:
-    - `SLOT-NAME`: The symbol for the sync slot.
-    - `BODY-FORM`: The expression that computes the slot's value. `obj` anaphor
-      is available here.
-    - `PLIST-OPTS`: Optional `plist` for `lazy-slot-sync!` (e.g., `:cache-options`).
+  Arguments:
+    :type (symbol): The `cl-defstruct` type symbol for which slots are being defined.
+    :eager (list, optional): A list of slot symbols for which standard (eager)
+                            accessors should be defined. These slots are like
+                            regular `cl-defstruct` slots. Each element is a
+                            slot symbol (e.g., `(field1 field2)`).
+    :async (list, optional): A list of asynchronous lazy slot definitions.
+                            Each element is a list `(SLOT-NAME FN-BODY &rest PLIST-OPTS)`, where:
+                            - `SLOT-NAME`: The symbol for the async slot.
+                            - `FN-BODY`: The expression defining the asynchronous computation.
+                              `obj` and `cb` anaphors are available here. This body
+                              should eventually call `cb` with the result.
+                            - `PLIST-OPTS`: Optional `plist` for `lazy-slot-async!`
+                              (e.g., `:options`, `:cache-options`).
+    :sync (list, optional): A list of synchronous lazy slot definitions.
+                           Each element is a list `(SLOT-NAME BODY-FORM &rest PLIST-OPTS)`, where:
+                           - `SLOT-NAME`: The symbol for the sync slot.
+                           - `BODY-FORM`: The expression that computes the slot's value.
+                             `obj` anaphor is available here.
+                           - `PLIST-OPTS`: Optional `plist` for `lazy-slot-sync!`
+                             (e.g., `:cache-options`).
 
-Results:
-- A `progn` form that defines all the specified accessor functions and registers
-  their lazy evaluation logic.
-"
+  Returns:
+    (progn): A `progn` form that defines all the specified accessor functions and
+             registers their lazy evaluation logic."
   (declare (indent 1))
   `(progn
      ;; Define eager slots (standard getters and setters).
      ,@(--map `(progn
-                (defun ,(intern (format "%s-%s" type it)) (obj)
-                  ,(format "Eager getter for slot %S of type %S." it type)
-                  (cl-struct-slot-value ,type ',it obj))
-                (cl-defun ,(intern (format "setf-%s-%s" type it)) (val obj)
-                  ,(format "Eager setter for slot %S of type %S." it type)
-                  (setf (cl-struct-slot-value ,type ',it obj) val)))
+                 (defun ,(intern (format "%s-%s" type it)) (obj)
+                   ,(format "Eager getter for slot %S of type %S." it type)
+                   (cl-struct-slot-value ,type ',it obj))
+                 (cl-defun ,(intern (format "setf-%s-%s" type it)) (val obj)
+                   ,(format "Eager setter for slot %S of type %S." it type)
+                   (setf (cl-struct-slot-value ,type ',it obj) val)))
               eager)
      ;; Define synchronous lazy slots using `lazy-slot-sync!`.
      ,@(--map (let* ((slot (car it)) ; Extract slot name.
                      (body (cadr it)) ; Extract computation body.
                      (opts (cddr it))) ; Extract additional options.
-               `(lazy-slot-sync! ,slot ,type ,body ,@opts))
+                 `(lazy-slot-sync! ,slot ,type ,body ,@opts))
               sync)
      ;; Define asynchronous lazy slots using `lazy-slot-async!`.
      ,@(--map (let* ((slot (car it)) ; Extract slot name.
                      (fn-body (cadr it)) ; Extract async function body.
                      (opts (cddr it))) ; Extract additional options.
-               `(lazy-slot-async! ,slot ,type ,fn-body ,@opts))
+                 `(lazy-slot-async! ,slot ,type ,fn-body ,@opts))
               async)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -590,24 +607,24 @@ Results:
 (defun lazy-slot-status (obj slot)
   "Return the status of a lazy SLOT on OBJ without triggering computation.
 
-This function allows you to inspect the current state of a lazy slot's
-value. It will not initiate any computation if the slot is `uninitialized`
-or block if it's `pending`.
+  This function allows you to inspect the current state of a lazy slot's
+  value. It will not initiate any computation if the slot is `uninitialized`
+  or block if it's `pending`.
 
-Arguments:
-- `OBJ` (cl-struct): The object instance.
-- `SLOT` (symbol): The lazy slot name.
+  Arguments:
+    OBJ (cl-struct): The object instance.
+    SLOT (symbol): The lazy slot name.
 
-Results:
-- (symbol): One of:
-  - `'uninitialized`: The slot's value has not yet been computed or set.
-  - `'pending`: For asynchronous slots, the computation has started but not yet
-    completed (the slot holds a `concur` future that is not yet resolved).
-  - `'resolved`: The slot's value has been successfully computed and is available.
-  - `'rejected`: For asynchronous slots, the computation failed (the `concur`
-    future resolved to an error).
-  - `'cancelled`: For asynchronous slots, the pending computation was explicitly
-    cancelled."
+  Returns:
+    (symbol): One of:
+    - `'uninitialized`: The slot's value has not yet been computed or set.
+    - `'pending`: For asynchronous slots, the computation has started but not yet
+                   completed (the slot holds a `concur` future that is not yet resolved).
+    - `'resolved`: The slot's value has been successfully computed and is available.
+    - `'rejected`: For asynchronous slots, the computation failed (the `concur`
+                    future resolved to an error).
+    - `'cancelled`: For asynchronous slots, the pending computation was explicitly
+                     cancelled."
   (lazy-slot--log :debug "Getting status for slot %S on %S." slot obj)
   (let* ((type (type-of obj))
          (current-val (cl-struct-slot-value type slot obj)))
@@ -621,40 +638,42 @@ Results:
 (defun lazy-slot-force-fetch (obj slot &optional options)
   "Explicitly force or re-force computation of a lazy SLOT on OBJ.
 
-This function is useful for eagerly loading a lazy slot's value in the
-background, or for refreshing a potentially stale cached value.
+  This function is useful for eagerly loading a lazy slot's value in the
+  background, or for refreshing a potentially stale cached value.
 
-Arguments:
-- `OBJ` (cl-struct): The object instance.
-- `SLOT` (symbol): The lazy slot name.
-- `OPTIONS` (plist, optional): An optional `plist` of options that can
-  override the original `lazy-slot-opts` for this specific fetch operation
-  (e.g., to force `auto-fetch` or change `timeout` temporarily).
+  Arguments:
+    OBJ (cl-struct): The object instance.
+    SLOT (symbol): The lazy slot name.
+    OPTIONS (plist, optional): An optional `plist` of options that can
+                               override the original `lazy-slot-opts` for this
+                               specific fetch operation (e.g., to force
+                               `auto-fetch` or change `timeout` temporarily).
 
-Results:
-- (concur-promise): Returns the `concur` promise associated with the
-  (re)computation of the slot's value. You can use `concur:await` on this
-  promise if you need to block until the fetch is complete.
-"
+  Returns:
+    (concur-promise): Returns the `concur` promise associated with the
+                      (re)computation of the slot's value. You can use
+                      `concur:await` on this promise if you need to block until
+                      the fetch is complete."
   (lazy-slot--log :info "Forcing fetch for slot %S on %S. Options: %S" slot obj options)
   (let* ((type (type-of obj))
          (definition (lazy-slot--get-definition type slot)))
     (unless definition
       (error "lazy-slot-force-fetch: Slot %S on type %S not defined via lazy-slot macros.
-              Only slots defined with `lazy-slot-sync!` or `lazy-slot-async!` can be force-fetched."
+               Only slots defined with `lazy-slot-sync!` or `lazy-slot-async!` can be force-fetched."
              slot type))
 
     (let* ((is-async (plist-get definition :is-async))
            (body-form (plist-get definition :body)) ; For sync slots
            (fn-body-form (plist-get definition :fn-body)) ; For async slots
-           (cacheus-fn (plist-get definition :cacheus-fn-sym)) ; Memoized function if caching
+           (cacheus-fn-sym (plist-get definition :cacheus-fn-sym)) ; Memoized function symbol if caching
            (opts (lazy-slot--parse-opts (or options (plist-get definition :options)))) ; Parse and possibly override options
            (promise-thunk-form
-            (lambda () 
-              (if cacheus-fn
+            (lambda ()
+              (if cacheus-fn-sym
                   ;; If caching is enabled, use the memoized function.
-                  (lazy-slot--log :debug "  Force-fetch using cacheus memoized function for %S." slot)
-                  (funcall cacheus-fn obj)
+                  (progn
+                    (lazy-slot--log :debug "  Force-fetch using cacheus memoized function for %S." slot)
+                    (funcall cacheus-fn-sym obj))
                 ;; If no caching, create a promise directly based on slot type.
                 (if is-async
                     (progn
@@ -674,20 +693,19 @@ Results:
 (defun lazy-slot-clear-cache (obj slot)
   "Clear the cached value of a lazy SLOT on OBJ.
 
-This function invalidates any stored value for the specified lazy slot,
-forcing its re-computation on the next access. For asynchronous slots,
-it also attempts to cancel any ongoing background computation associated
-with the slot. If `cacheus` is used, its corresponding cache entry is
-invalidated.
+  This function invalidates any stored value for the specified lazy slot,
+  forcing its re-computation on the next access. For asynchronous slots,
+  it also attempts to cancel any ongoing background computation associated
+  with the slot. If `cacheus` is used, its corresponding cache entry is
+  invalidated.
 
-Arguments:
-- `OBJ` (cl-struct): The object instance.
-- `SLOT` (symbol): The lazy slot name.
+  Arguments:
+    OBJ (cl-struct): The object instance.
+    SLOT (symbol): The lazy slot name.
 
-Results:
-- None.
-"
-  (cl-block lazy-slot-clear-cache-block 
+  Returns:
+    nil."
+  (cl-block lazy-slot-clear-cache-block
     (lazy-slot--log :info "Clearing cache for slot %S on %S." slot obj)
     (let* ((type (type-of obj))
            (current-val (cl-struct-slot-value type slot obj))
@@ -720,19 +738,19 @@ Results:
 (defun lazy-slot-value (obj slot)
   "Return the resolved value of a lazy SLOT on OBJ if resolved.
 
-This function provides a non-blocking way to retrieve a lazy slot's value.
-It will *not* trigger the computation if the slot is uninitialized, nor will it
-block if the computation is still pending. It returns the value only if the
-underlying promise for an async slot is already in the 'resolved state, or if
-a synchronous slot has already been computed.
+  This function provides a non-blocking way to retrieve a lazy slot's value.
+  It will *not* trigger the computation if the slot is uninitialized, nor will it
+  block if the computation is still pending. It returns the value only if the
+  underlying promise for an async slot is already in the 'resolved state, or if
+  a synchronous slot has already been computed.
 
-Arguments:
-- `OBJ` (cl-struct): The object instance.
-- `SLOT` (symbol): The lazy slot name.
+  Arguments:
+    OBJ (cl-struct): The object instance.
+    SLOT (symbol): The lazy slot name.
 
-Results:
-- (any): The resolved value of the slot, or `nil` if the slot is `uninitialized`,
-  `pending`, `rejected`, or `cancelled`."
+  Returns:
+    (any): The resolved value of the slot, or `nil` if the slot is `uninitialized`,
+           `pending`, `rejected`, or `cancelled`."
   (lazy-slot--log :debug "Getting resolved value for slot %S on %S (non-blocking)." slot obj)
   (let* ((type (type-of obj))
          (current-val (cl-struct-slot-value type slot obj)))
@@ -746,17 +764,17 @@ Results:
 (defun lazy-slot-error (obj slot)
   "Return the error value of a lazy SLOT on OBJ if rejected.
 
-This function allows inspecting the error state of a lazy slot. It will
-not trigger computation or block. It returns the error object only if the
-underlying promise for an async slot is in the 'rejected state.
+  This function allows inspecting the error state of a lazy slot. It will
+  not trigger computation or block. It returns the error object only if the
+  underlying promise for an async slot is in the 'rejected state.
 
-Arguments:
-- `OBJ` (cl-struct): The object instance.
-- `SLOT` (symbol): The lazy slot name.
+  Arguments:
+    OBJ (cl-struct): The object instance.
+    SLOT (symbol): The lazy slot name.
 
-Results:
-- (any): The error value (e.g., an Emacs Lisp error object, string), or `nil`
-  if the slot is not in a 'rejected state."
+  Returns:
+    (any): The error value (e.g., an Emacs Lisp error object, string), or `nil`
+           if the slot is not in a 'rejected state."
   (lazy-slot--log :debug "Getting error value for slot %S on %S (non-blocking)." slot obj)
   (let* ((type (type-of obj))
          (current-val (cl-struct-slot-value type slot obj)))
