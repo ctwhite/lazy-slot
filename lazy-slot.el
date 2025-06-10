@@ -120,7 +120,7 @@ Arguments:
 
 Example:
   (add-hook 'lazy-slot-log-hook (lambda (level fmt &rest args)
-                                   (apply #'message (format "[Lazy-Slot %s] %s" level fmt) args)))"
+                                   (apply #'message (format \"[Lazy-Slot %s] %s\" level fmt) args)))"
   :type 'hook
   :group 'lazy-slot)
 
