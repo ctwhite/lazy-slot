@@ -132,8 +132,7 @@ type symbol and `SLOT` is the lazy slot symbol.
 Values are property lists (`plist`) containing the details of the lazy slot's
 definition, such as its body expression, options, and cache configuration.
 This allows the library to retrieve the original computation logic when a
-lazy slot is accessed for the first time."
-  :type (hash-table :test equal)) ; Specify the hash table's test function for cons keys.
+lazy slot is accessed for the first time.")
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Definitions
@@ -440,7 +439,7 @@ Arguments:
 - `:constructor` (symbol, optional): The `cl-defstruct`'s constructor function
   (e.g., `make-my-struct`). If provided, `lazy-slot-async!` will advise this
   constructor to automatically initiate the async fetch if `:auto-fetch` is `t`.
-  Defaults to `(intern (format "make-%s" type))`.
+  Defaults to `(intern (format \"make-%s\" type))`.
 - `:cache-options` (plist, optional): Options for `cacheus-memoize!`, applied
   to the asynchronous computation. This allows caching of async results.
 
